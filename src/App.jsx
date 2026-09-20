@@ -1,28 +1,42 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
-import AuthProvider from './auth/AuthProvider'
-import ProtectedRoute from './auth/ProtectedRoute'
-import AppLayout from './layouts/AppLayout'
+import HomePage from './pages/HomePage'
+import LoginPage from './pages/LoginPage'
+import RegisterPage from './pages/RegisterPage'
 import Dashboard from './pages/Dashboard'
-import Login from './pages/Login'
-import Register from './pages/Register'
+import Stores from './pages/Stores'
+import Customers from './pages/Customers'
+import Products from './pages/Products'
+import Orders from './pages/Orders'
+import Opportunities from './pages/Opportunities'
+import Segments from './pages/Segments'
+import Integrations from './pages/Integrations'
+import AppLayout from './layouts/AppLayout'
+import ProtectedRoute from './auth/ProtectedRoute'
+import StoreDetails from './pages/StoreDetails'
 
 function App() {
   return (
-    <AuthProvider>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+    <Routes>
+      <Route path="/" element={<HomePage />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
 
-        <Route element={<ProtectedRoute />}>
-          <Route element={<AppLayout />}>
-            <Route path="/dashboard" element={<Dashboard />} />
-          </Route>
+      <Route element={<ProtectedRoute />}>
+        <Route element={<AppLayout />}>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/stores" element={<Stores />} />
+          <Route path="/stores/:id" element={<StoreDetails />} />
+          <Route path="/customers" element={<Customers />} />
+          <Route path="/products" element={<Products />} />
+          <Route path="/orders" element={<Orders />} />
+          <Route path="/opportunities" element={<Opportunities />} />
+          <Route path="/segments" element={<Segments />} />
+          <Route path="/integrations" element={<Integrations />} />
         </Route>
+      </Route>
 
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
-    </AuthProvider>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   )
 }
 
