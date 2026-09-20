@@ -17,4 +17,10 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
+export const getDashboard = async () => {
+  const response = await apiClient.get('/dashboard')
+
+  return response.data
+}
+
 export default apiClient
