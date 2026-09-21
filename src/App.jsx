@@ -10,12 +10,14 @@ import ProductDetails from './pages/ProductDetails'
 import Orders from './pages/Orders'
 import OrderDetails from './pages/OrderDetails'
 import Opportunities from './pages/Opportunities'
-import Segments from './pages/Segments'
-import Integrations from './pages/Integrations'
+import OpportunityDetails from './pages/OpportunityDetails'
 import AppLayout from './layouts/AppLayout'
 import ProtectedRoute from './auth/ProtectedRoute'
 import StoreDetails from './pages/StoreDetails'
 import CustomerDetails from './pages/CustomerDetails'
+import PricingPage from './pages/PricingPage'
+import Segments from './pages/Segments'
+
 
 function App() {
   return (
@@ -23,6 +25,7 @@ function App() {
       <Route path="/" element={<HomePage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/pricing" element={<PricingPage />} />
 
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
@@ -36,8 +39,8 @@ function App() {
           <Route path="/orders" element={<Orders />} />
           <Route path="/orders/:id" element={<OrderDetails />} />
           <Route path="/opportunities" element={<Opportunities />} />
+          <Route path="/opportunities/:id" element={<OpportunityDetails />} />
           <Route path="/segments" element={<Segments />} />
-          <Route path="/integrations" element={<Integrations />} />
         </Route>
       </Route>
 
