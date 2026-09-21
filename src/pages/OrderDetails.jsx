@@ -1,20 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
-  AlertCircle,
   ArrowLeft,
   CalendarDays,
-  Clock3,
-  Edit3,
+  CheckCircle2,
+  ChevronDown,
+  CircleDollarSign,
+  FileText,
+  Hash,
   Loader2,
-  Package,
+  Pencil,
   Plus,
-  ShoppingCart,
+  ShoppingBag,
   Store as StoreIcon,
   Trash2,
   User,
   X,
 } from 'lucide-react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   createOrderItem,
   deleteOrder,
@@ -24,11 +26,11 @@ import {
   updateOrder,
   updateOrderItem,
 } from '../api/orders'
+import { getStores } from '../api/stores'
 import { getCustomers } from '../api/customers'
 import { getProducts } from '../api/products'
-import { getStores } from '../api/stores'
 
-const STATUS_OPTIONS = [
+const ORDER_STATUSES = [
   { value: 'pending', label: 'En attente' },
   { value: 'paid', label: 'Payée' },
   { value: 'fulfilled', label: 'Terminée' },
@@ -40,11 +42,11 @@ const STATUS_STYLES = {
   pending: 'bg-amber-50 text-amber-700 ring-amber-600/20',
   paid: 'bg-blue-50 text-blue-700 ring-blue-600/20',
   fulfilled: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
-  cancelled: 'bg-slate-100 text-slate-600 ring-slate-500/20',
-  refunded: 'bg-rose-50 text-rose-700 ring-rose-600/20',
+  cancelled: 'bg-red-50 text-red-700 ring-red-600/20',
+  refunded: 'bg-violet-50 text-violet-700 ring-violet-600/20',
 }
 
-const EMPTY_ORDER_FORM = {
+const emptyOrderForm = {
   customer_id: '',
   external_id: '',
   order_number: '',
@@ -58,7 +60,7 @@ const EMPTY_ORDER_FORM = {
   ordered_at: '',
 }
 
-const EMPTY_ITEM_FORM = {
+const emptyItemForm = {
   product_id: '',
   external_id: '',
   title: '',
@@ -71,29 +73,17 @@ const EMPTY_ITEM_FORM = {
   currency: 'EUR',
 }
 
-function getStatusLabel(status) {
-  return (
-    STATUS_OPTIONS.find((option) => option.value === status)?.label ||
-    status ||
-    '—'
-  )
-}
-
 function formatCurrency(value, currency = 'EUR') {
-  if (value === null || value === undefined || value === '') {
-    return '—'
-  }
+  const amount = Number(value || 0)
 
   return new Intl.NumberFormat('fr-FR', {
     style: 'currency',
     currency,
-  }).format(Number(value))
+  }).format(amount)
 }
 
 function formatDate(value) {
-  if (!value) {
-    return '—'
-  }
+  if (!value) return '—'
 
   return new Intl.DateTimeFormat('fr-FR', {
     dateStyle: 'medium',
@@ -101,44 +91,61 @@ function formatDate(value) {
   }).format(new Date(value))
 }
 
-function getCustomerName(customer) {
-  if (!customer) {
-    return '—'
-  }
+function formatDateInput(value) {
+  if (!value) return ''
 
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) return ''
+
+  const offset = date.getTimezoneOffset()
+  const localDate = new Date(date.getTime() - offset * 60 * 1000)
+
+  return localDate.toISOString().slice(0, 16)
+}
+
+function getStatusLabel(status) {
   return (
-    [customer.first_name, customer.last_name]
-      .filter(Boolean)
-      .join(' ') ||
-    customer.company_name ||
-    customer.email ||
-    customer.id
+    ORDER_STATUSES.find((item) => item.value === status)?.label ||
+    status ||
+    'Inconnu'
   )
 }
 
-function getErrorMessage(error, fallback) {
-  const data = error?.response?.data
+function getCustomerName(customer) {
+  if (!customer) return 'Client inconnu'
 
-  if (data?.errors) {
-    if (Array.isArray(data.errors)) {
-      return data.errors.join(', ')
-    }
+  const fullName = [customer.first_name, customer.last_name]
+    .filter(Boolean)
+    .join(' ')
 
-    if (typeof data.errors === 'object') {
-      return Object.entries(data.errors)
-        .map(([field, messages]) => {
-          const value = Array.isArray(messages) ? messages.join(', ') : messages
-          return `${field}: ${value}`
-        })
-        .join(' | ')
-    }
+  return (
+    customer.company_name ||
+    fullName ||
+    customer.email ||
+    'Client sans nom'
+  )
+}
 
-    if (typeof data.errors === 'string') {
-      return data.errors
-    }
-  }
+function getProductName(product) {
+  return product?.title || product?.name || 'Produit inconnu'
+}
 
-  return data?.message || error?.message || fallback
+function toNumber(value) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : 0
+}
+
+function calculateItemTotal(form) {
+  const quantity = toNumber(form.quantity)
+  const unitPrice = toNumber(form.unit_price)
+  const discount = toNumber(form.discount)
+  const tax = toNumber(form.tax)
+
+  return Math.max(
+    0,
+    quantity * unitPrice - discount + tax,
+  )
 }
 
 export default function OrderDetails() {
@@ -147,65 +154,62 @@ export default function OrderDetails() {
 
   const [order, setOrder] = useState(null)
   const [items, setItems] = useState([])
+  const [stores, setStores] = useState([])
   const [customers, setCustomers] = useState([])
   const [products, setProducts] = useState([])
-  const [stores, setStores] = useState([])
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const [isOrderEditOpen, setIsOrderEditOpen] = useState(false)
-  const [isItemOpen, setIsItemOpen] = useState(false)
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  const [isItemModalOpen, setIsItemModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [submitError, setSubmitError] = useState('')
+  const [isSavingItem, setIsSavingItem] = useState(false)
+  const [deletingItemId, setDeletingItemId] = useState(null)
 
-  const [orderForm, setOrderForm] = useState(EMPTY_ORDER_FORM)
-  const [itemForm, setItemForm] = useState(EMPTY_ITEM_FORM)
-
-  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [form, setForm] = useState(emptyOrderForm)
+  const [itemForm, setItemForm] = useState(emptyItemForm)
 
   useEffect(() => {
     let cancelled = false
 
-    const loadData = async () => {
-      setLoading(true)
-      setError('')
-
+    const run = async () => {
       try {
+        setLoading(true)
+        setError('')
+
         const [
           orderData,
           orderItemsData,
+          storesData,
           customersData,
           productsData,
-          storesData,
         ] = await Promise.all([
           getOrder(id),
           getOrderItems(id),
+          getStores(),
           getCustomers(),
           getProducts(),
-          getStores(),
         ])
 
-        if (cancelled) {
-          return
-        }
+        if (cancelled) return
 
         setOrder(orderData)
-        setItems(Array.isArray(orderItemsData) ? orderItemsData : [])
-        setCustomers(Array.isArray(customersData) ? customersData : [])
-        setProducts(Array.isArray(productsData) ? productsData : [])
-        setStores(Array.isArray(storesData) ? storesData : [])
+        setItems(orderItemsData)
+        setStores(storesData)
+        setCustomers(customersData)
+        setProducts(productsData)
       } catch (requestError) {
-        if (cancelled) {
-          return
-        }
+        if (cancelled) return
 
         setError(
-          getErrorMessage(
-            requestError,
+          requestError.response?.data?.error ||
+            requestError.response?.data?.message ||
             'Impossible de charger la commande.',
-          ),
         )
       } finally {
         if (!cancelled) {
@@ -214,49 +218,40 @@ export default function OrderDetails() {
       }
     }
 
-    loadData()
+    void run()
 
     return () => {
       cancelled = true
     }
   }, [id])
 
-  const customer = useMemo(
-    () => customers.find((item) => item.id === order?.customer_id),
-    [customers, order],
+  const store = stores.find((item) => item.id === order?.store_id)
+
+  const customer = customers.find(
+    (item) => item.id === order?.customer_id,
   )
 
-  const store = useMemo(
-    () => stores.find((item) => item.id === order?.store_id),
-    [stores, order],
+  const storeCustomers = customers.filter(
+    (item) => item.store_id === order?.store_id,
   )
 
   const storeProducts = useMemo(
-    () => products.filter((product) => product.store_id === order?.store_id),
-    [products, order],
-  )
-
-  const productsById = useMemo(
-    () => new Map(products.map((product) => [product.id, product])),
-    [products],
-  )
-
-  const totalItems = useMemo(
     () =>
-      items.reduce(
-        (sum, item) => sum + Number(item.quantity || 0),
-        0,
+      products.filter(
+        (item) => item.store_id === order?.store_id,
       ),
-    [items],
+    [products, order?.store_id],
   )
 
-  const handleOpenOrderEdit = () => {
-    if (!order) {
-      return
-    }
+  const totalItems = items.reduce(
+    (sum, item) => sum + toNumber(item.quantity),
+    0,
+  )
 
-    setSubmitError('')
-    setOrderForm({
+  const handleOpenEdit = () => {
+    if (!order) return
+
+    setForm({
       customer_id: order.customer_id || '',
       external_id: order.external_id || '',
       order_number: order.order_number || '',
@@ -267,82 +262,114 @@ export default function OrderDetails() {
       shipping: order.shipping ?? '',
       discount: order.discount ?? '',
       total: order.total ?? '',
-      ordered_at: order.ordered_at
-        ? new Date(order.ordered_at).toISOString().slice(0, 16)
-        : '',
+      ordered_at: formatDateInput(order.ordered_at),
     })
-    setIsOrderEditOpen(true)
+
+    setIsEditOpen(true)
+    setError('')
   }
 
-  const handleOrderChange = (event) => {
+  const handleChange = (event) => {
     const { name, value } = event.target
 
-    setOrderForm((current) => ({
+    setForm((current) => ({
       ...current,
       [name]: value,
     }))
   }
 
-  const handleOrderSubmit = async (event) => {
+  const handleSave = async (event) => {
     event.preventDefault()
-    setSubmitError('')
 
-    if (!orderForm.external_id.trim()) {
-      setSubmitError("L'identifiant externe est obligatoire.")
+    if (!form.external_id.trim()) {
+      setError("L'identifiant externe est obligatoire.")
       return
     }
 
-    if (!orderForm.order_number.trim()) {
-      setSubmitError('Le numéro de commande est obligatoire.')
+    if (!form.order_number.trim()) {
+      setError('Le numéro de commande est obligatoire.')
       return
     }
 
-    setIsSubmitting(true)
+    const numericFields = [
+      'subtotal',
+      'tax',
+      'shipping',
+      'discount',
+      'total',
+    ]
+
+    for (const field of numericFields) {
+      if (toNumber(form[field]) < 0) {
+        setError('Les montants doivent être positifs ou nuls.')
+        return
+      }
+    }
+
+    setIsSaving(true)
+    setError('')
 
     try {
       const updatedOrder = await updateOrder(id, {
-        customer_id: orderForm.customer_id || null,
-        external_id: orderForm.external_id.trim(),
-        order_number: orderForm.order_number.trim(),
-        status: orderForm.status,
-        currency: orderForm.currency.trim().toUpperCase(),
-        subtotal: Number(orderForm.subtotal || 0),
-        tax: Number(orderForm.tax || 0),
-        shipping: Number(orderForm.shipping || 0),
-        discount: Number(orderForm.discount || 0),
-        total: Number(orderForm.total || 0),
-        ordered_at: orderForm.ordered_at
-          ? new Date(orderForm.ordered_at).toISOString()
+        customer_id: form.customer_id || null,
+        external_id: form.external_id.trim(),
+        order_number: form.order_number.trim(),
+        status: form.status,
+        currency: form.currency.trim().toUpperCase(),
+        subtotal: toNumber(form.subtotal),
+        tax: toNumber(form.tax),
+        shipping: toNumber(form.shipping),
+        discount: toNumber(form.discount),
+        total: toNumber(form.total),
+        ordered_at: form.ordered_at
+          ? new Date(form.ordered_at).toISOString()
           : null,
       })
 
       setOrder(updatedOrder)
-      setIsOrderEditOpen(false)
+      setIsEditOpen(false)
     } catch (requestError) {
-      setSubmitError(
-        getErrorMessage(
-          requestError,
+      setError(
+        requestError.response?.data?.error ||
+          requestError.response?.data?.message ||
           'Impossible de modifier la commande.',
-        ),
       )
     } finally {
-      setIsSubmitting(false)
+      setIsSaving(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    setIsDeleting(true)
+    setError('')
+
+    try {
+      await deleteOrder(id)
+      navigate('/orders')
+    } catch (requestError) {
+      setError(
+        requestError.response?.data?.error ||
+          requestError.response?.data?.message ||
+          'Impossible de supprimer la commande.',
+      )
+      setIsDeleting(false)
+      setIsDeleteOpen(false)
     }
   }
 
   const handleOpenCreateItem = () => {
     setEditingItem(null)
-    setSubmitError('')
     setItemForm({
-      ...EMPTY_ITEM_FORM,
+      ...emptyItemForm,
       currency: order?.currency || 'EUR',
     })
-    setIsItemOpen(true)
+    setError('')
+    setIsItemModalOpen(true)
   }
 
   const handleOpenEditItem = (item) => {
     setEditingItem(item)
-    setSubmitError('')
+
     setItemForm({
       product_id: item.product_id || '',
       external_id: item.external_id || '',
@@ -350,12 +377,14 @@ export default function OrderDetails() {
       sku: item.sku || '',
       quantity: String(item.quantity ?? 1),
       unit_price: item.unit_price ?? '',
-      discount: item.discount ?? 0,
-      tax: item.tax ?? 0,
+      discount: item.discount ?? '0',
+      tax: item.tax ?? '0',
       total: item.total ?? '',
       currency: item.currency || order?.currency || 'EUR',
     })
-    setIsItemOpen(true)
+
+    setError('')
+    setIsItemModalOpen(true)
   }
 
   const handleItemChange = (event) => {
@@ -369,37 +398,55 @@ export default function OrderDetails() {
 
   const handleProductChange = (event) => {
     const productId = event.target.value
-    const product = productsById.get(productId)
 
-    setItemForm((current) => ({
-      ...current,
-      product_id: productId,
-      title: product?.title || current.title,
-      sku: product?.sku || current.sku,
-      unit_price:
-        product?.price !== undefined && product?.price !== null
-          ? product.price
-          : current.unit_price,
-      currency: product?.currency || order?.currency || current.currency,
-    }))
+    if (!productId) {
+      setItemForm((current) => ({
+        ...current,
+        product_id: '',
+      }))
+      return
+    }
+
+    const product = storeProducts.find(
+      (item) => item.id === productId,
+    )
+
+    if (!product) return
+
+    setItemForm((current) => {
+      const nextForm = {
+        ...current,
+        product_id: product.id,
+        title: product.title || product.name || '',
+        sku: product.sku || '',
+        unit_price: product.price ?? '',
+        currency: product.currency || order?.currency || 'EUR',
+      }
+
+      return {
+        ...nextForm,
+        total: calculateItemTotal(nextForm).toFixed(2),
+      }
+    })
   }
 
-  const handleItemSubmit = async (event) => {
+  const handleSaveItem = async (event) => {
     event.preventDefault()
-    setSubmitError('')
 
     if (!itemForm.product_id) {
-      setSubmitError('Le produit est obligatoire.')
+      setError('Le produit est obligatoire.')
       return
     }
 
     if (!itemForm.title.trim()) {
-      setSubmitError('Le titre est obligatoire.')
+      setError("Le titre de l'article est obligatoire.")
       return
     }
 
-    if (Number(itemForm.quantity) <= 0) {
-      setSubmitError('La quantité doit être supérieure à 0.')
+    const quantity = Number(itemForm.quantity)
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      setError('La quantité doit être un entier supérieur à zéro.')
       return
     }
 
@@ -411,697 +458,643 @@ export default function OrderDetails() {
     ]
 
     for (const field of numericFields) {
-      if (itemForm[field] !== '' && Number(itemForm[field]) < 0) {
-        setSubmitError('Les montants ne peuvent pas être négatifs.')
+      if (toNumber(itemForm[field]) < 0) {
+        setError('Les montants doivent être positifs ou nuls.')
         return
       }
     }
 
-    setIsSubmitting(true)
+    setIsSavingItem(true)
+    setError('')
 
     try {
       const payload = {
         product_id: itemForm.product_id,
         external_id: itemForm.external_id.trim() || null,
         title: itemForm.title.trim(),
-        sku: itemForm.sku.trim() || null,
-        quantity: Number(itemForm.quantity),
-        unit_price: Number(itemForm.unit_price || 0),
-        discount: Number(itemForm.discount || 0),
-        tax: Number(itemForm.tax || 0),
-        total: Number(itemForm.total || 0),
+        sku: itemForm.sku.trim(),
+        quantity,
+        unit_price: toNumber(itemForm.unit_price),
+        discount: toNumber(itemForm.discount),
+        tax: toNumber(itemForm.tax),
+        total: toNumber(itemForm.total),
         currency: itemForm.currency.trim().toUpperCase(),
       }
 
-      if (editingItem) {
-        const updatedItem = await updateOrderItem(
-          id,
-          editingItem.id,
-          payload,
-        )
+      const savedItem = editingItem
+        ? await updateOrderItem(id, editingItem.id, payload)
+        : await createOrderItem(id, payload)
 
-        setItems((current) =>
-          current.map((item) =>
-            item.id === updatedItem.id ? updatedItem : item,
-          ),
-        )
-      } else {
-        const createdItem = await createOrderItem(id, payload)
-        setItems((current) => [...current, createdItem])
-      }
+      setItems((current) => {
+        if (!editingItem) {
+          return [...current, savedItem]
+        }
 
-      setIsItemOpen(false)
+        return current.map((item) =>
+          item.id === savedItem.id ? savedItem : item,
+        )
+      })
+
+      setIsItemModalOpen(false)
       setEditingItem(null)
-      setItemForm(EMPTY_ITEM_FORM)
     } catch (requestError) {
-      setSubmitError(
-        getErrorMessage(
-          requestError,
-          editingItem
-            ? 'Impossible de modifier la ligne.'
-            : 'Impossible de créer la ligne.',
-        ),
+      setError(
+        requestError.response?.data?.error ||
+          requestError.response?.data?.message ||
+          "Impossible d'enregistrer l'article.",
       )
     } finally {
-      setIsSubmitting(false)
+      setIsSavingItem(false)
     }
   }
 
-  const handleDeleteItem = async () => {
-    if (!deleteTarget) {
-      return
-    }
+  const handleDeleteItem = async (itemId) => {
+    const confirmed = window.confirm(
+      'Supprimer cet article de la commande ?',
+    )
 
-    setIsSubmitting(true)
-    setSubmitError('')
+    if (!confirmed) return
+
+    setDeletingItemId(itemId)
+    setError('')
 
     try {
-      await deleteOrderItem(id, deleteTarget.id)
+      await deleteOrderItem(id, itemId)
 
       setItems((current) =>
-        current.filter((item) => item.id !== deleteTarget.id),
+        current.filter((item) => item.id !== itemId),
       )
-      setDeleteTarget(null)
     } catch (requestError) {
-      setSubmitError(
-        getErrorMessage(
-          requestError,
-          'Impossible de supprimer la ligne.',
-        ),
+      setError(
+        requestError.response?.data?.error ||
+          requestError.response?.data?.message ||
+          "Impossible de supprimer l'article.",
       )
     } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  const handleDeleteOrder = async () => {
-    setIsSubmitting(true)
-    setSubmitError('')
-
-    try {
-      await deleteOrder(id)
-      navigate('/orders')
-    } catch (requestError) {
-      setSubmitError(
-        getErrorMessage(
-          requestError,
-          'Impossible de supprimer la commande.',
-        ),
-      )
-      setIsSubmitting(false)
+      setDeletingItemId(null)
     }
   }
 
   if (loading) {
     return (
-      <div className="flex min-h-96 items-center justify-center">
-        <div className="flex items-center gap-2 text-sm text-slate-500">
-          <Loader2 size={18} className="animate-spin" />
-          Chargement de la commande...
-        </div>
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <Loader2 className="h-7 w-7 animate-spin text-slate-400" />
       </div>
     )
   }
 
-  if (error || !order) {
+  if (!order) {
     return (
-      <div className="mx-auto max-w-4xl">
+      <div className="mx-auto max-w-5xl">
         <Link
           to="/orders"
-          className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900"
+          className="mb-6 inline-flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-950"
         >
-          <ArrowLeft size={16} />
+          <ArrowLeft className="h-4 w-4" />
           Retour aux commandes
         </Link>
 
-        <div className="mt-6 flex items-start gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">
-          <AlertCircle size={19} className="mt-0.5 shrink-0" />
-          <div>
-            <p className="font-semibold">Commande introuvable</p>
-            <p className="mt-1">
-              {error || 'Cette commande n’existe pas ou n’est plus accessible.'}
-            </p>
-          </div>
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">
+          {error || 'Commande introuvable.'}
         </div>
       </div>
     )
   }
 
   return (
-    <div className="mx-auto max-w-7xl">
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <Link
-            to="/orders"
-            className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 transition hover:text-slate-900"
-          >
-            <ArrowLeft size={16} />
-            Retour aux commandes
-          </Link>
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <Link
+          to="/orders"
+          className="inline-flex w-fit items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-950"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Retour aux commandes
+        </Link>
 
-          <div className="mt-5 flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-              <ShoppingCart size={21} />
-            </div>
-
-            <div>
-              <p className="text-sm font-medium text-slate-500">
-                Commande
-              </p>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-                {order.order_number}
-              </h1>
-            </div>
-
-            <span
-              className={`ml-2 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${
-                STATUS_STYLES[order.status] ||
-                'bg-slate-100 text-slate-600 ring-slate-500/20'
-              }`}
-            >
-              {getStatusLabel(order.status)}
-            </span>
-          </div>
-
-          <p className="mt-2 text-sm text-slate-500">
-            {order.external_id}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={handleOpenOrderEdit}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            onClick={handleOpenEdit}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
           >
-            <Edit3 size={16} />
+            <Pencil className="h-4 w-4" />
             Modifier
           </button>
 
           <button
             type="button"
-            onClick={() =>
-              setDeleteTarget({
-                type: 'order',
-                id: order.id,
-                label: order.order_number,
-              })
-            }
-            className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-white px-4 py-2.5 text-sm font-semibold text-rose-600 transition hover:bg-rose-50"
+            onClick={() => setIsDeleteOpen(true)}
+            className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-4 py-2.5 text-sm font-semibold text-red-600 shadow-sm transition hover:bg-red-50"
           >
-            <Trash2 size={16} />
+            <Trash2 className="h-4 w-4" />
             Supprimer
           </button>
         </div>
       </div>
 
-      {submitError && !isItemOpen && !isOrderEditOpen && (
-        <div className="mt-5 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-          <AlertCircle size={18} className="mt-0.5 shrink-0" />
-          <p>{submitError}</p>
+      {error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
         </div>
       )}
 
-      <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm font-medium text-slate-500">Total</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">
-            {formatCurrency(order.total, order.currency)}
-          </p>
-          <p className="mt-1 text-xs text-slate-400">
-            {order.currency}
-          </p>
-        </div>
+      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="mb-3 flex flex-wrap items-center gap-3">
+              <span className="inline-flex items-center gap-2 text-sm font-medium text-slate-500">
+                <ShoppingBag className="h-4 w-4" />
+                Commande
+              </span>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm font-medium text-slate-500">
-            Sous-total
-          </p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">
-            {formatCurrency(order.subtotal, order.currency)}
-          </p>
-          <p className="mt-1 text-xs text-slate-400">
-            Avant taxes et livraison
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm font-medium text-slate-500">
-            Lignes
-          </p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">
-            {items.length}
-          </p>
-          <p className="mt-1 text-xs text-slate-400">
-            {totalItems} article{totalItems > 1 ? 's' : ''}
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm font-medium text-slate-500">
-            Commandée le
-          </p>
-          <p className="mt-2 text-base font-bold text-slate-900">
-            {formatDate(order.ordered_at)}
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-7 grid gap-5 lg:grid-cols-3">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-              <StoreIcon size={18} />
+              <span
+                className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${
+                  STATUS_STYLES[order.status] ||
+                  'bg-slate-100 text-slate-700 ring-slate-600/20'
+                }`}
+              >
+                {getStatusLabel(order.status)}
+              </span>
             </div>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                Store
+
+            <h1 className="text-2xl font-bold tracking-tight text-slate-950">
+              {order.order_number}
+            </h1>
+
+            <p className="mt-1 text-sm text-slate-500">
+              ID externe : {order.external_id}
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-slate-50 px-5 py-4 text-right">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Total
+            </p>
+            <p className="mt-1 text-2xl font-bold text-slate-950">
+              {formatCurrency(order.total, order.currency)}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+              <StoreIcon className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Boutique
               </p>
-              <p className="mt-1 font-semibold text-slate-900">
-                {store?.name || '—'}
+              <p className="mt-1 truncate text-sm font-semibold text-slate-900">
+                {store?.name || 'Boutique inconnue'}
               </p>
             </div>
           </div>
-
-          {store && (
-            <div className="mt-5 space-y-2 text-sm text-slate-500">
-              <p>
-                Plateforme :{' '}
-                <span className="font-medium text-slate-700">
-                  {store.platform || '—'}
-                </span>
-              </p>
-              <p>
-                Domaine :{' '}
-                <span className="font-medium text-slate-700">
-                  {store.domain || '—'}
-                </span>
-              </p>
-              <p>
-                Devise :{' '}
-                <span className="font-medium text-slate-700">
-                  {store.currency || order.currency}
-                </span>
-              </p>
-            </div>
-          )}
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-              <User size={18} />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+              <User className="h-5 w-5" />
             </div>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                 Client
               </p>
-              <p className="mt-1 font-semibold text-slate-900">
+              <p className="mt-1 truncate text-sm font-semibold text-slate-900">
                 {getCustomerName(customer)}
               </p>
             </div>
           </div>
-
-          {customer && (
-            <div className="mt-5 space-y-2 text-sm text-slate-500">
-              <p>{customer.email || 'Email non renseigné'}</p>
-              <p>{customer.phone || 'Téléphone non renseigné'}</p>
-              {customer.company_name && (
-                <p className="font-medium text-slate-700">
-                  {customer.company_name}
-                </p>
-              )}
-            </div>
-          )}
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-              <CalendarDays size={18} />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+              <CalendarDays className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                Informations
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Commandée le
               </p>
-              <p className="mt-1 font-semibold text-slate-900">
-                Commande #{order.order_number}
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {formatDate(order.ordered_at)}
               </p>
             </div>
           </div>
+        </div>
 
-          <div className="mt-5 space-y-2 text-sm text-slate-500">
-            <p>
-              Créée le :{' '}
-              <span className="font-medium text-slate-700">
-                {formatDate(order.created_at)}
-              </span>
-            </p>
-            <p>
-              Mise à jour :{' '}
-              <span className="font-medium text-slate-700">
-                {formatDate(order.updated_at)}
-              </span>
-            </p>
-            <p>
-              Externe :{' '}
-              <span className="font-medium text-slate-700">
-                {order.external_id}
-              </span>
-            </p>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+              <CircleDollarSign className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Devise
+              </p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {order.currency}
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div className="mt-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-col gap-4 border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <Package size={18} className="text-slate-500" />
-              <h2 className="font-bold text-slate-900">
-                Lignes de commande
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-6 py-5">
+            <div>
+              <h2 className="font-semibold text-slate-950">
+                Articles de la commande
               </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                {totalItems} article{totalItems > 1 ? 's' : ''}
+              </p>
             </div>
-            <p className="mt-1 text-sm text-slate-500">
-              Produits et quantités associés à cette commande.
-            </p>
+
+            <button
+              type="button"
+              onClick={handleOpenCreateItem}
+              className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+            >
+              <Plus className="h-4 w-4" />
+              Ajouter
+            </button>
           </div>
 
-          <button
-            type="button"
-            onClick={handleOpenCreateItem}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
-          >
-            <Plus size={16} />
-            Ajouter une ligne
-          </button>
-        </div>
+          {items.length === 0 ? (
+            <div className="px-6 py-12 text-center">
+              <ShoppingBag className="mx-auto h-8 w-8 text-slate-300" />
+              <p className="mt-3 text-sm font-medium text-slate-700">
+                Aucun article
+              </p>
+              <p className="mt-1 text-sm text-slate-500">
+                Ajoutez le premier article à cette commande.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left">
+                <thead className="border-b border-slate-200 bg-slate-50">
+                  <tr>
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Produit
+                    </th>
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      SKU
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Qté
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Prix unitaire
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Total
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
 
-        {items.length === 0 ? (
-          <div className="flex min-h-40 flex-col items-center justify-center px-6 text-center">
-            <Package size={28} className="text-slate-300" />
-            <p className="mt-3 text-sm font-semibold text-slate-900">
-              Aucune ligne de commande
-            </p>
-            <p className="mt-1 text-sm text-slate-500">
-              Ajoutez un produit à cette commande.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[850px] text-left">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50/70">
-                  <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Produit
-                  </th>
-                  <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    SKU
-                  </th>
-                  <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Quantité
-                  </th>
-                  <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Prix unitaire
-                  </th>
-                  <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Total
-                  </th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {items.map((item) => {
+                    const product = products.find(
+                      (productItem) => productItem.id === item.product_id,
+                    )
 
-              <tbody className="divide-y divide-slate-100">
-                {items.map((item) => {
-                  const product = productsById.get(item.product_id)
-
-                  return (
-                    <tr key={item.id} className="hover:bg-slate-50/70">
-                      <td className="px-5 py-4">
-                        <p className="font-semibold text-slate-900">
-                          {item.title}
-                        </p>
-                        {product && (
-                          <p className="mt-1 text-xs text-slate-400">
-                            {product.external_id}
+                    return (
+                      <tr key={item.id} className="hover:bg-slate-50/70">
+                        <td className="px-6 py-4">
+                          <p className="font-medium text-slate-900">
+                            {item.title || getProductName(product)}
                           </p>
-                        )}
-                      </td>
+                        </td>
 
-                      <td className="px-5 py-4 text-sm text-slate-500">
-                        {item.sku || '—'}
-                      </td>
+                        <td className="px-6 py-4 text-sm text-slate-500">
+                          {item.sku || product?.sku || '—'}
+                        </td>
 
-                      <td className="px-5 py-4 text-sm font-semibold text-slate-700">
-                        {item.quantity}
-                      </td>
+                        <td className="px-6 py-4 text-right text-sm text-slate-700">
+                          {item.quantity}
+                        </td>
 
-                      <td className="px-5 py-4 text-sm text-slate-600">
-                        {formatCurrency(item.unit_price, item.currency)}
-                      </td>
+                        <td className="px-6 py-4 text-right text-sm text-slate-700">
+                          {formatCurrency(
+                            item.unit_price,
+                            item.currency,
+                          )}
+                        </td>
 
-                      <td className="px-5 py-4 text-sm font-bold text-slate-900">
-                        {formatCurrency(item.total, item.currency)}
-                      </td>
+                        <td className="px-6 py-4 text-right text-sm font-semibold text-slate-900">
+                          {formatCurrency(item.total, item.currency)}
+                        </td>
 
-                      <td className="px-5 py-4 text-right">
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditItem(item)}
-                            className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                          >
-                            Modifier
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setDeleteTarget({
-                                type: 'item',
-                                id: item.id,
-                                label: item.title,
-                              })
-                            }
-                            className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50"
-                          >
-                            Supprimer
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                        <td className="px-6 py-4">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditItem(item)}
+                              className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                              title="Modifier"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteItem(item.id)}
+                              disabled={deletingItemId === item.id}
+                              className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                              title="Supprimer"
+                            >
+                              {deletingItemId === item.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <aside className="space-y-6">
+          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="font-semibold text-slate-950">
+              Résumé financier
+            </h2>
+
+            <div className="mt-5 space-y-3 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-slate-500">Sous-total</span>
+                <span className="font-medium text-slate-900">
+                  {formatCurrency(order.subtotal, order.currency)}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-slate-500">Taxes</span>
+                <span className="font-medium text-slate-900">
+                  {formatCurrency(order.tax, order.currency)}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-slate-500">Livraison</span>
+                <span className="font-medium text-slate-900">
+                  {formatCurrency(order.shipping, order.currency)}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-slate-500">Remise</span>
+                <span className="font-medium text-slate-900">
+                  -{formatCurrency(order.discount, order.currency)}
+                </span>
+              </div>
+
+              <div className="border-t border-slate-200 pt-3">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="font-semibold text-slate-950">
+                    Total
+                  </span>
+                  <span className="text-lg font-bold text-slate-950">
+                    {formatCurrency(order.total, order.currency)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="font-semibold text-slate-950">
+              Informations
+            </h2>
+
+            <dl className="mt-5 space-y-4 text-sm">
+              <div className="flex items-start gap-3">
+                <Hash className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+                <div>
+                  <dt className="text-xs text-slate-500">
+                    ID commande
+                  </dt>
+                  <dd className="mt-1 break-all font-medium text-slate-800">
+                    {order.id}
+                  </dd>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <FileText className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+                <div>
+                  <dt className="text-xs text-slate-500">
+                    ID externe
+                  </dt>
+                  <dd className="mt-1 break-all font-medium text-slate-800">
+                    {order.external_id}
+                  </dd>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+                <div>
+                  <dt className="text-xs text-slate-500">Statut</dt>
+                  <dd className="mt-1 font-medium text-slate-800">
+                    {getStatusLabel(order.status)}
+                  </dd>
+                </div>
+              </div>
+            </dl>
+          </section>
+        </aside>
       </div>
 
-      <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex items-center gap-2">
-          <Clock3 size={18} className="text-slate-500" />
-          <h2 className="font-bold text-slate-900">Récapitulatif financier</h2>
-        </div>
-
-        <div className="mt-5 grid gap-3 text-sm sm:max-w-md sm:ml-auto">
-          <div className="flex justify-between gap-6 text-slate-500">
-            <span>Sous-total</span>
-            <span className="font-medium text-slate-900">
-              {formatCurrency(order.subtotal, order.currency)}
-            </span>
-          </div>
-          <div className="flex justify-between gap-6 text-slate-500">
-            <span>Taxe</span>
-            <span className="font-medium text-slate-900">
-              {formatCurrency(order.tax, order.currency)}
-            </span>
-          </div>
-          <div className="flex justify-between gap-6 text-slate-500">
-            <span>Livraison</span>
-            <span className="font-medium text-slate-900">
-              {formatCurrency(order.shipping, order.currency)}
-            </span>
-          </div>
-          <div className="flex justify-between gap-6 text-slate-500">
-            <span>Remise</span>
-            <span className="font-medium text-slate-900">
-              {formatCurrency(order.discount, order.currency)}
-            </span>
-          </div>
-          <div className="border-t border-slate-200 pt-3 flex justify-between gap-6">
-            <span className="font-bold text-slate-900">Total</span>
-            <span className="text-lg font-bold text-slate-900">
-              {formatCurrency(order.total, order.currency)}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {isOrderEditOpen && (
+      {isEditOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
           <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-200 px-6 py-5">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">
+                <h2 className="text-lg font-semibold text-slate-950">
                   Modifier la commande
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Le store ne peut pas être modifié.
+                  Les informations de la boutique ne sont pas
+                  modifiables.
                 </p>
               </div>
+
               <button
                 type="button"
-                onClick={() => setIsOrderEditOpen(false)}
+                onClick={() => setIsEditOpen(false)}
                 className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                aria-label="Fermer"
               >
-                <X size={19} />
+                <X className="h-5 w-5" />
               </button>
             </div>
 
-            <form onSubmit={handleOrderSubmit} className="p-6">
-              {submitError && (
-                <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-                  {submitError}
-                </div>
-              )}
-
-              <div className="grid gap-5 md:grid-cols-2">
+            <form onSubmit={handleSave} className="space-y-6 p-6">
+              <div className="grid gap-4 md:grid-cols-2">
                 <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Boutique
+                  </span>
+                  <input
+                    value={store?.name || ''}
+                    disabled
+                    className="w-full rounded-xl border border-slate-200 bg-slate-100 px-3.5 py-2.5 text-sm text-slate-500"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
                     Client
                   </span>
                   <select
                     name="customer_id"
-                    value={orderForm.customer_id}
-                    onChange={handleOrderChange}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-slate-400"
+                    value={form.customer_id}
+                    onChange={handleChange}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
                   >
                     <option value="">Aucun client</option>
-                    {customers
-                      .filter(
-                        (item) => item.store_id === order.store_id,
-                      )
-                      .map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {getCustomerName(item)}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-
-                <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Statut
-                  </span>
-                  <select
-                    name="status"
-                    value={orderForm.status}
-                    onChange={handleOrderChange}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-slate-400"
-                  >
-                    {STATUS_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
+                    {storeCustomers.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {getCustomerName(item)}
                       </option>
                     ))}
                   </select>
                 </label>
 
                 <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
                     Numéro de commande
                   </span>
                   <input
                     name="order_number"
-                    value={orderForm.order_number}
-                    onChange={handleOrderChange}
+                    value={form.order_number}
+                    onChange={handleChange}
                     required
-                    className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
                     Identifiant externe
                   </span>
                   <input
                     name="external_id"
-                    value={orderForm.external_id}
-                    onChange={handleOrderChange}
+                    value={form.external_id}
+                    onChange={handleChange}
                     required
-                    className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Statut
+                  </span>
+                  <div className="relative">
+                    <select
+                      name="status"
+                      value={form.status}
+                      onChange={handleChange}
+                      className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-slate-900 outline-none focus:border-slate-400"
+                    >
+                      {ORDER_STATUSES.map((status) => (
+                        <option
+                          key={status.value}
+                          value={status.value}
+                        >
+                          {status.label}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  </div>
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Devise
+                  </span>
+                  <input
+                    name="currency"
+                    value={form.currency}
+                    onChange={handleChange}
+                    maxLength={3}
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm uppercase text-slate-900 outline-none focus:border-slate-400"
                   />
                 </label>
 
                 {[
                   ['subtotal', 'Sous-total'],
-                  ['tax', 'Taxe'],
+                  ['tax', 'Taxes'],
                   ['shipping', 'Livraison'],
                   ['discount', 'Remise'],
                   ['total', 'Total'],
                 ].map(([name, label]) => (
                   <label key={name} className="block">
-                    <span className="text-sm font-semibold text-slate-700">
+                    <span className="mb-1.5 block text-sm font-medium text-slate-700">
                       {label}
                     </span>
                     <input
-                      name={name}
                       type="number"
+                      name={name}
+                      value={form[name]}
+                      onChange={handleChange}
                       min="0"
                       step="0.01"
-                      value={orderForm[name]}
-                      onChange={handleOrderChange}
-                      className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
+                      required
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
                     />
                   </label>
                 ))}
 
-                <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Devise
-                  </span>
-                  <input
-                    name="currency"
-                    maxLength={3}
-                    value={orderForm.currency}
-                    onChange={handleOrderChange}
-                    className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm uppercase outline-none focus:border-slate-400"
-                  />
-                </label>
-
-                <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">
+                <label className="block md:col-span-2">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
                     Date de commande
                   </span>
                   <input
-                    name="ordered_at"
                     type="datetime-local"
-                    value={orderForm.ordered_at}
-                    onChange={handleOrderChange}
-                    className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
+                    name="ordered_at"
+                    value={form.ordered_at}
+                    onChange={handleChange}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
                   />
                 </label>
               </div>
 
-              <div className="mt-6 flex justify-end gap-3 border-t border-slate-200 pt-5">
+              <div className="flex justify-end gap-3 border-t border-slate-200 pt-5">
                 <button
                   type="button"
-                  onClick={() => setIsOrderEditOpen(false)}
-                  disabled={isSubmitting}
-                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                  onClick={() => setIsEditOpen(false)}
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   Annuler
                 </button>
+
                 <button
                   type="submit"
-                  disabled={isSubmitting}
-                  className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                  disabled={isSaving}
+                  className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isSubmitting && (
-                    <Loader2 size={16} className="animate-spin" />
+                  {isSaving && (
+                    <Loader2 className="h-4 w-4 animate-spin" />
                   )}
                   Enregistrer
                 </button>
@@ -1111,161 +1104,216 @@ export default function OrderDetails() {
         </div>
       )}
 
-      {isItemOpen && (
+      {isItemModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
-          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-200 px-6 py-5">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">
-                  {editingItem ? 'Modifier la ligne' : 'Ajouter une ligne'}
+                <h2 className="text-lg font-semibold text-slate-950">
+                  {editingItem
+                    ? "Modifier l'article"
+                    : 'Ajouter un article'}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Sélectionnez un produit appartenant au store de la commande.
+                  Le produit doit appartenir à la boutique de cette
+                  commande.
                 </p>
               </div>
+
               <button
                 type="button"
-                onClick={() => setIsItemOpen(false)}
+                onClick={() => setIsItemModalOpen(false)}
                 className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                aria-label="Fermer"
               >
-                <X size={19} />
+                <X className="h-5 w-5" />
               </button>
             </div>
 
-            <form onSubmit={handleItemSubmit} className="p-6">
-              {submitError && (
-                <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-                  {submitError}
-                </div>
-              )}
-
-              <div className="grid gap-5 md:grid-cols-2">
+            <form onSubmit={handleSaveItem} className="space-y-6 p-6">
+              <div className="grid gap-4 md:grid-cols-2">
                 <label className="block md:col-span-2">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Produit *
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Produit
                   </span>
-                  <select
-                    value={itemForm.product_id}
-                    onChange={handleProductChange}
-                    required
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-slate-400"
-                  >
-                    <option value="">Sélectionner un produit</option>
-                    {storeProducts.map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.title}
-                        {product.sku ? ` — ${product.sku}` : ''}
+
+                  <div className="relative">
+                    <select
+                      name="product_id"
+                      value={itemForm.product_id}
+                      onChange={handleProductChange}
+                      required
+                      className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 pr-10 text-sm text-slate-900 outline-none focus:border-slate-400"
+                    >
+                      <option value="">
+                        Sélectionner un produit
                       </option>
-                    ))}
-                  </select>
+
+                      {storeProducts.map((product) => (
+                        <option key={product.id} value={product.id}>
+                          {getProductName(product)}
+                          {product.sku ? ` — ${product.sku}` : ''}
+                        </option>
+                      ))}
+                    </select>
+
+                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  </div>
+
+                  {storeProducts.length === 0 && (
+                    <p className="mt-2 text-xs text-amber-600">
+                      Aucun produit n'est disponible pour cette
+                      boutique.
+                    </p>
+                  )}
                 </label>
 
                 <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Titre *
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Titre
                   </span>
                   <input
                     name="title"
                     value={itemForm.title}
                     onChange={handleItemChange}
                     required
-                    className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
                     SKU
                   </span>
                   <input
                     name="sku"
                     value={itemForm.sku}
                     onChange={handleItemChange}
-                    className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Quantité
+                  </span>
+                  <input
+                    type="number"
+                    name="quantity"
+                    value={itemForm.quantity}
+                    onChange={handleItemChange}
+                    min="1"
+                    step="1"
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Prix unitaire
+                  </span>
+                  <input
+                    type="number"
+                    name="unit_price"
+                    value={itemForm.unit_price}
+                    onChange={handleItemChange}
+                    min="0"
+                    step="0.01"
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Remise
+                  </span>
+                  <input
+                    type="number"
+                    name="discount"
+                    value={itemForm.discount}
+                    onChange={handleItemChange}
+                    min="0"
+                    step="0.01"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Taxe
+                  </span>
+                  <input
+                    type="number"
+                    name="tax"
+                    value={itemForm.tax}
+                    onChange={handleItemChange}
+                    min="0"
+                    step="0.01"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Total
+                  </span>
+                  <input
+                    type="number"
+                    name="total"
+                    value={itemForm.total}
+                    onChange={handleItemChange}
+                    min="0"
+                    step="0.01"
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-slate-400"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Devise
+                  </span>
+                  <input
+                    name="currency"
+                    value={itemForm.currency}
+                    onChange={handleItemChange}
+                    maxLength={3}
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm uppercase text-slate-900 outline-none focus:border-slate-400"
+                  />
+                </label>
+
+                <label className="block md:col-span-2">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">
                     Identifiant externe
                   </span>
                   <input
                     name="external_id"
                     value={itemForm.external_id}
                     onChange={handleItemChange}
-                    className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
-                  />
-                </label>
-
-                <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Quantité *
-                  </span>
-                  <input
-                    name="quantity"
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={itemForm.quantity}
-                    onChange={handleItemChange}
-                    required
-                    className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
-                  />
-                </label>
-
-                {[
-                  ['unit_price', 'Prix unitaire'],
-                  ['discount', 'Remise'],
-                  ['tax', 'Taxe'],
-                  ['total', 'Total'],
-                ].map(([name, label]) => (
-                  <label key={name} className="block">
-                    <span className="text-sm font-semibold text-slate-700">
-                      {label}
-                    </span>
-                    <input
-                      name={name}
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={itemForm[name]}
-                      onChange={handleItemChange}
-                      className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
-                    />
-                  </label>
-                ))}
-
-                <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Devise
-                  </span>
-                  <input
-                    name="currency"
-                    maxLength={3}
-                    value={itemForm.currency}
-                    onChange={handleItemChange}
-                    className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm uppercase outline-none focus:border-slate-400"
+                    placeholder="Optionnel"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-slate-400"
                   />
                 </label>
               </div>
 
-              <div className="mt-6 flex justify-end gap-3 border-t border-slate-200 pt-5">
+              <div className="flex justify-end gap-3 border-t border-slate-200 pt-5">
                 <button
                   type="button"
-                  onClick={() => setIsItemOpen(false)}
-                  disabled={isSubmitting}
-                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                  onClick={() => setIsItemModalOpen(false)}
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   Annuler
                 </button>
+
                 <button
                   type="submit"
-                  disabled={isSubmitting}
-                  className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                  disabled={isSavingItem || storeProducts.length === 0}
+                  className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isSubmitting && (
-                    <Loader2 size={16} className="animate-spin" />
+                  {isSavingItem && (
+                    <Loader2 className="h-4 w-4 animate-spin" />
                   )}
                   {editingItem ? 'Enregistrer' : 'Ajouter'}
                 </button>
@@ -1275,56 +1323,41 @@ export default function OrderDetails() {
         </div>
       )}
 
-      {deleteTarget && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/40 p-4">
+      {isDeleteOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
-              <Trash2 size={19} />
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-red-600">
+              <Trash2 className="h-5 w-5" />
             </div>
 
-            <h2 className="mt-5 text-lg font-bold text-slate-900">
-              Confirmer la suppression
+            <h2 className="mt-5 text-lg font-semibold text-slate-950">
+              Supprimer cette commande ?
             </h2>
 
             <p className="mt-2 text-sm leading-6 text-slate-500">
-              Voulez-vous vraiment supprimer{' '}
-              <span className="font-semibold text-slate-700">
-                {deleteTarget.label}
-              </span>
-              {' ? Cette action est irréversible.'}
+              La commande <strong>{order.order_number}</strong> sera
+              supprimée définitivement ainsi que ses lignes de
+              commande.
             </p>
-
-            {submitError && (
-              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-                {submitError}
-              </div>
-            )}
 
             <div className="mt-6 flex justify-end gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  setDeleteTarget(null)
-                  setSubmitError('')
-                }}
-                disabled={isSubmitting}
-                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                onClick={() => setIsDeleteOpen(false)}
+                disabled={isDeleting}
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 Annuler
               </button>
 
               <button
                 type="button"
-                onClick={
-                  deleteTarget.type === 'order'
-                    ? handleDeleteOrder
-                    : handleDeleteItem
-                }
-                disabled={isSubmitting}
-                className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+                onClick={handleDelete}
+                disabled={isDeleting}
+                className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isSubmitting && (
-                  <Loader2 size={16} className="animate-spin" />
+                {isDeleting && (
+                  <Loader2 className="h-4 w-4 animate-spin" />
                 )}
                 Supprimer
               </button>
