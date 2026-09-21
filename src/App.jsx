@@ -8,6 +8,7 @@ import Customers from './pages/Customers'
 import Products from './pages/Products'
 import ProductDetails from './pages/ProductDetails'
 import Orders from './pages/Orders'
+import OrderDetails from './pages/OrderDetails'
 import Opportunities from './pages/Opportunities'
 import Segments from './pages/Segments'
 import Integrations from './pages/Integrations'
@@ -33,6 +34,7 @@ function App() {
           <Route path="/products" element={<Products />} />
           <Route path="/products/:id" element={<ProductDetails />} />
           <Route path="/orders" element={<Orders />} />
+          <Route path="/orders/:id" element={<OrderDetails />} />
           <Route path="/opportunities" element={<Opportunities />} />
           <Route path="/segments" element={<Segments />} />
           <Route path="/integrations" element={<Integrations />} />
