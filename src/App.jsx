@@ -18,15 +18,21 @@ import CustomerDetails from './pages/CustomerDetails'
 import PricingPage from './pages/PricingPage'
 import Segments from './pages/Segments'
 import Integrations from './pages/Integrations'
+import FeaturesPage from './pages/FeaturesPage'
+import HowItWorksPage from './pages/HowItWorksPage'
+import ProductPage from './pages/ProductPage'
 
 
 function App() {
   return (
     <Routes>
       <Route path="/" element={<HomePage />} />
+      <Route path="/features" element={<FeaturesPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/pricing" element={<PricingPage />} />
+      <Route path="/how-it-works" element={<HowItWorksPage />} />
+      <Route path="/product" element={<ProductPage />} />
 
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
