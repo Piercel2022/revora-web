@@ -17,6 +17,7 @@ import StoreDetails from './pages/StoreDetails'
 import CustomerDetails from './pages/CustomerDetails'
 import PricingPage from './pages/PricingPage'
 import Segments from './pages/Segments'
+import Integrations from './pages/Integrations'
 
 
 function App() {
@@ -41,6 +42,7 @@ function App() {
           <Route path="/opportunities" element={<Opportunities />} />
           <Route path="/opportunities/:id" element={<OpportunityDetails />} />
           <Route path="/segments" element={<Segments />} />
+           <Route path="/integrations" element={<Integrations />} />
         </Route>
       </Route>
 

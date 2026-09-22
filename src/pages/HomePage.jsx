@@ -631,7 +631,7 @@ function Homepage() {
             <a href="#features" className="hover:text-slate-950">
               Features
             </a>
-            <a href="#pricing" className="hover:text-slate-950">
+            <a href="/pricing" className="hover:text-slate-950">
               Pricing
             </a>
             <a href="/login" className="hover:text-slate-950">
