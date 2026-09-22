@@ -112,7 +112,7 @@ function Homepage() {
               How it works
             </a>
             <a
-              href="#pricing"
+              href="/pricing"
               className="text-sm font-medium text-slate-600 transition hover:text-slate-950"
             >
               Pricing
@@ -171,7 +171,7 @@ function Homepage() {
                 How it works
               </a>
               <a
-                href="#pricing"
+                href="/pricing"
                 onClick={() => setMobileOpen(false)}
                 className="text-sm font-medium text-slate-700"
               >
